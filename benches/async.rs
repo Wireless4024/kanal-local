@@ -3,14 +3,15 @@ mod common;
 pub use common::*;
 use criterion::*;
 use std::{thread::available_parallelism, time::Duration};
+use tokio::task::LocalSet;
 
 macro_rules! run_bench {
     ($b:expr, $tx:expr, $rx:expr, $writers:expr, $readers:expr) => {{
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(usize::from(available_parallelism().unwrap()))
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
+        let localset = LocalSet::new();
         let readers_dist = evenly_distribute(BENCH_MSG_COUNT, $readers);
         let writers_dist = evenly_distribute(BENCH_MSG_COUNT, $writers);
         $b.iter(|| {
@@ -18,7 +19,7 @@ macro_rules! run_bench {
             for d in 0..$readers {
                 let rx = $rx.clone();
                 let iterations = readers_dist[d];
-                handles.push(rt.spawn(async move {
+                handles.push(localset.spawn_local(async move {
                     for _ in 0..iterations {
                         check_value(black_box(rx.recv().await.unwrap()));
                     }
@@ -27,14 +28,14 @@ macro_rules! run_bench {
             for d in 0..$writers {
                 let tx = $tx.clone();
                 let iterations = writers_dist[d];
-                handles.push(rt.spawn(async move {
+                handles.push(localset.spawn_local(async move {
                     for i in 0..iterations {
                         tx.send(i + 1).await.unwrap();
                     }
                 }));
             }
             for handle in handles {
-                rt.block_on(handle).unwrap();
+                localset.block_on(&rt, handle).unwrap();
             }
         });
     }};

@@ -1,19 +1,17 @@
-#[cfg(not(feature = "std-mutex"))]
-use crate::mutex::{Mutex, MutexGuard};
+
 use crate::signal::DynamicSignal;
 extern crate alloc;
 use alloc::collections::VecDeque;
 use branches::unlikely;
 use cacheguard::CacheGuard;
 use core::fmt::Debug;
-#[cfg(feature = "std-mutex")]
-use std::sync::{Mutex, MutexGuard};
+use std::cell::{RefCell, RefMut};
 
 pub(crate) struct Internal<T> {
     // The cache guard to keep internal pointer in cache, it works with both std mutex and mutex.rs
     _guard: CacheGuard<()>,
     /// The internal channel object
-    internal: *mut (Mutex<ChannelInternal<T>>, usize),
+    internal: *mut (RefCell<ChannelInternal<T>>, usize),
 }
 
 impl<T> Debug for Internal<T> {
@@ -21,10 +19,6 @@ impl<T> Debug for Internal<T> {
         f.debug_struct("Internal").finish()
     }
 }
-
-// Mutex is sync and send, so we can send it across threads
-unsafe impl<T: Send> Send for Internal<T> {}
-unsafe impl<T> Sync for Internal<T> {}
 
 impl<T> Internal<T> {
     #[inline(always)]
@@ -52,7 +46,7 @@ impl<T> Internal<T> {
 
         Internal {
             _guard: CacheGuard::new(()),
-            internal: Box::into_raw(Box::new((Mutex::new(ret), abstract_capacity))),
+            internal: Box::into_raw(Box::new((RefCell::new(ret), abstract_capacity))),
         }
     }
 
@@ -108,7 +102,7 @@ impl<T> Internal<T> {
 }
 
 impl<T> core::ops::Deref for Internal<T> {
-    type Target = Mutex<ChannelInternal<T>>;
+    type Target = RefCell<ChannelInternal<T>>;
     fn deref(&self) -> &Self::Target {
         unsafe { &(*self.internal).0 }
     }
@@ -116,11 +110,8 @@ impl<T> core::ops::Deref for Internal<T> {
 
 /// Acquire mutex guard on channel internal for use in channel operations
 #[inline(always)]
-pub(crate) fn acquire_internal<T>(internal: &'_ Internal<T>) -> MutexGuard<'_, ChannelInternal<T>> {
-    #[cfg(not(feature = "std-mutex"))]
-    return internal.lock();
-    #[cfg(feature = "std-mutex")]
-    internal.lock().unwrap_or_else(|err| err.into_inner())
+pub(crate) fn acquire_internal<T>(internal: &'_ Internal<T>) -> RefMut<'_, ChannelInternal<T>> {
+    internal.borrow_mut()
 }
 
 /// Tries to acquire mutex guard on channel internal for use in channel
@@ -128,11 +119,8 @@ pub(crate) fn acquire_internal<T>(internal: &'_ Internal<T>) -> MutexGuard<'_, C
 #[inline(always)]
 pub(crate) fn try_acquire_internal<T>(
     internal: &'_ Internal<T>,
-) -> Option<MutexGuard<'_, ChannelInternal<T>>> {
-    #[cfg(not(feature = "std-mutex"))]
-    return internal.try_lock();
-    #[cfg(feature = "std-mutex")]
-    internal.try_lock().ok()
+) -> Option<RefMut<'_, ChannelInternal<T>>> {
+    internal.try_borrow_mut().ok()
 }
 
 /// Internal of the channel that holds queues, waitlists, and general state of
@@ -240,7 +228,7 @@ impl<T> ChannelInternal<T> {
     }
 
     /// checks if send signal exists in wait list
-    #[cfg(feature = "async")]
+
     pub(crate) fn send_signal_exists(&self, sig: *const ()) -> bool {
         if !self.recv_blocking {
             for signal in self.wait_list.iter() {
@@ -253,7 +241,7 @@ impl<T> ChannelInternal<T> {
     }
 
     /// checks if receive signal exists in wait list
-    #[cfg(feature = "async")]
+
     pub(crate) fn recv_signal_exists(&self, sig: *const ()) -> bool {
         if self.recv_blocking {
             for signal in self.wait_list.iter() {

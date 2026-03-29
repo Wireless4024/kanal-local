@@ -5,7 +5,6 @@
 /// it makes it easier to test and compare different backoff solutions.
 use core::{
     num::NonZeroUsize,
-    sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
     time::Duration,
 };
 use std::thread;
@@ -64,11 +63,12 @@ pub fn spin_rand() {
 #[allow(dead_code)]
 #[inline(always)]
 fn random_u7() -> u8 {
-    static SEED: AtomicU8 = AtomicU8::new(13);
     const MULTIPLIER: u8 = 113;
-    // Increment the seed atomically. Relaxed ordering is enough as we only need an
-    // atomic operation on the SEED itself.
-    let seed = SEED.fetch_add(1, Ordering::Relaxed);
+    let seed = {
+        static mut SEED: u8 = 13;
+        unsafe { SEED += 1 };
+        unsafe { SEED }
+    };
     // Use a LCG-like algorithm to generate a random number from the seed.
     seed.wrapping_mul(MULTIPLIER) & 0x7F
 }
@@ -79,9 +79,12 @@ fn random_u7() -> u8 {
 #[allow(dead_code)]
 #[inline(always)]
 fn random_u32() -> u32 {
-    static SEED: AtomicU32 = AtomicU32::new(13);
     const MULTIPLIER: u32 = 1812433253;
-    let seed = SEED.fetch_add(1, Ordering::Relaxed);
+    let seed = {
+        static mut SEED: u32 = 13;
+        unsafe { SEED += 1 };
+        unsafe { SEED }
+    };
     seed.wrapping_mul(MULTIPLIER)
 }
 
@@ -100,14 +103,14 @@ pub fn randomize(d: usize) -> usize {
 /// threads concurrently.
 #[inline(always)]
 pub fn get_parallelism() -> usize {
-    static PARALLELISM: AtomicUsize = AtomicUsize::new(0);
-    let mut p = PARALLELISM.load(Ordering::Relaxed);
+    static mut PARALLELISM: usize = 0;
+    let mut p = unsafe { PARALLELISM };
     // If the parallelism degree has not been computed yet.
     if unlikely(p == 0) {
         // Try to get the degree of parallelism from available_parallelism.
         // If it is not available, default to 1.
         p = usize::from(thread::available_parallelism().unwrap_or(NonZeroUsize::new(1).unwrap()));
-        PARALLELISM.store(p, Ordering::Release);
+        unsafe { PARALLELISM = p };
     }
     // Return the computed degree of parallelism.
     p
